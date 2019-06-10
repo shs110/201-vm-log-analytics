@@ -235,41 +235,31 @@
       "defaultValue": "adVnet",
       "type": "string",
       "metadata": {
-        "description": "Name of the existing VNET to attach the VM to."
+        "description": "Name of the VNET to attach the VM to."
       }
     },
     "vmVnetPrefix": {
-      "defaultValue": "adVnet",
+      "defaultValue": "10.0.0.0/16",
       "type": "string",
       "metadata": {
-        "description": "Name of the existing VNET to attach the VM to."
+        "description": "Address range of the VNET to attach the VM to."
       }
     },
     "vmSubnetName": {
       "defaultValue": "adSubnet",
       "type": "string",
       "metadata": {
-        "description": "Name of the existing subnet within the VNET to attach the VM to."
+        "description": "Name of the subnet within the VNET to attach the VM to."
       }
     },
     "vmSubnetPrefix": {
-      "defaultValue": "adSubnet",
+      "defaultValue": "10.0.0.0/24",
       "type": "string",
       "metadata": {
         "description": "Address range of the subnet where the NIC will be attached"
       }
     },
-    "vmNicOptions": {
-      "defaultValue": "new",
-      "allowedValues": [
-        "new",
-        "existing"
-      ],
-      "type": "string",
-      "metadata": {
-        "description": "Options determining the use of a NIC (new, or existing)"
-      }
-    },
+ 
     "vmNicName": {
       "defaultValue": "mynic",
       "type": "string",
@@ -292,16 +282,6 @@
       "type": "array",
       "metadata": {
         "description": "Name of the managed disks. Will be prefixed with the name of the VM."
-      }
-    },
-    "vmDataDiskSizeArray": {
-      "defaultValue": [
-        1023,
-        1023
-      ],
-      "type": "array",
-      "metadata": {
-        "description": "Size in GB of the managed disks."
       }
     },
     "vmManagedDiskType": {
@@ -331,14 +311,14 @@
       "defaultValue": "",
       "type": "string",
       "metadata": {
-        "description": "Select IP Addresses for network interfaces of VMs. Will be ignored if nicIpAllocationMethod was chosen to be 'Dynamic'"
+        "description": "Select IP Address for static network interface of VMs. Will be ignored if nicIpAllocationMethod was chosen to be 'Dynamic'"
       }
     },
     "vmLogAnalyticsWorkspaceName": {
       "defaultValue": "",
       "type": "string",
       "metadata": {
-        "description": "Name of the existing Log Analytics Workspace"
+        "description": "Name of the Log Analytics Workspace"
       }
     },
     "logAnalyticsRegion": {
@@ -412,12 +392,12 @@
     "vmSubnetRef": "[concat(variables('vnetId'),'/subnets/', parameters('vmSubnetName'))]",
     "vmNamePrefixLowerCase": "[toLower(parameters('vmPrefix'))]",
     "vmTagValue": "[concat(deployment().name,',',guid(resourceGroup().id, deployment().name))]",
+    "publicIPAddressName": "testvmpublicIp",
     "actionGroupName": "emailAlertGroup",
     "actionGroupShortName": "emailAlert",
-    "storageAccountName": "cubesysdevtestazure",
-    "storageAccountContainerName": "armtemplates",
-    "storageAccountSasToken": "?sv=2017-07-29&sig=k51h8a5Ck8GwzEeClzW0ZRHD8sFoJAV%2B%2FJMA6BTS6J0%3D&se=2020-03-14T04%3A54%3A19Z&srt=sco&ss=bfqt&sp=r",
-    "101-datadisks-md-array-url": "[concat('https://', variables('storageAccountName'), '.blob.core.windows.net/', variables('storageAccountContainerName'), '/101-datadisks-md-array/101-datadisks-md-array/azuredeploy.json', variables('storageAccountSasToken'))]"
+    "vmConfigurationFunction": "createTextFile.ps1\\createTextFile",
+    "createTextFileScriptUri": "https://raw.githubusercontent.com/shs110/201-vm-log-analytics/master/201-vm-with-logAnalytics/createTextFile.zip"
+
   },
   "resources": [
     {
@@ -448,12 +428,21 @@
       ]
     },
     {
+      "apiVersion": "2015-06-15",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "name": "[variables('publicIPAddressName')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "publicIPAllocationMethod": "Dynamic"
+      }
+    },
+    {
       "type": "Microsoft.Network/networkInterfaces",
       "name": "[concat(parameters('vmPrefix'),'-',parameters('vmNicName'))]",
       "apiVersion": "2016-09-01",
       "location": "[resourceGroup().location]",
       "dependsOn": [
-
+        "[variables('publicIPAddressName')]",
         "[parameters('vmSubnetName')]"
       ],
       "properties": {
@@ -461,6 +450,9 @@
           {
             "name": "ipconfig1",
             "properties": {
+              "publicIPAddress": {
+                "id": "[resourceId ('Microsoft.Network/publicIPAddresses/', variables('publicIPAddressName'))]"
+              },
               "privateIPAllocationMethod": "[if(equals(parameters('nicIpAllocationMethod'),'Dynamic'),'Dynamic','Static')]",
               "privateIPAddress": "[if(equals(parameters('nicIpAllocationMethod'),'Dynamic'),'null', parameters('vmIpAddresses')[copyIndex()])]",
               "subnet": {
@@ -554,7 +546,7 @@
       "apiVersion": "2018-03-01",
       "name": "[variables('actionGroupName')]",
       "dependsOn": [
-        "[concat(parameters('vmPrefix'),'/LogAnalytics')]"
+        "[parameters('vmLogAnalyticsWorkspaceName')]"
       ],
       "location": "Global",
       "properties": {
@@ -574,8 +566,7 @@
       "location": "global",
       "apiVersion": "2018-03-01",
       "dependsOn": [
-        "[variables('actionGroupName')]",
-        "[concat(parameters('vmPrefix'),'/LogAnalytics')]"
+        "[variables('actionGroupName')]"
       ],
       "tags": {},
       "properties": {
@@ -615,6 +606,28 @@
           }
         ]
       }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "name": "[concat(parameters('vmPrefix'),'/createTextFile')]",
+      "apiVersion": "2016-04-30-preview",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "publisher": "Microsoft.Powershell",
+        "type": "DSC",
+        "typeHandlerVersion": "2.19",
+        "autoUpgradeMinorVersion": true,
+        "settings": {
+          "ModulesUrl": "[variables('createTextFileScriptUri')]",
+          "ConfigurationFunction": "[variables('vmConfigurationFunction')]",
+          "Properties": {
+            "vmTagValue": "[variables('vmTagValue')]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[parameters('vmPrefix')]"
+      ]
     }
   ],
   "outputs": {
